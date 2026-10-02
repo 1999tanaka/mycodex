@@ -1,0 +1,8 @@
+# すべて任意。標準ライブラリだけでも Harness は動作します。
+
+# 無ければ内蔵 YAML パーサを使用 (anchor 等の高度な構文を使う場合のみ必要)
+PyYAML>=6.0
+# 無ければ内蔵シリアル実装 (Win32 API / termios) で UART を読む
+pyserial>=3.5
+# Harness 自身のテスト (unittest でも実行可)
+pytest>=8.0

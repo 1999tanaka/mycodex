@@ -1,0 +1,33 @@
+# デモ用 config.yaml (実機不要のシミュレーション)
+# run_demo.py が .copilot-harness/config.yaml としてコピーする。
+
+project:
+  root: ..
+  languages: [cpp, ino]
+  include_dirs: [include, src]
+
+security:
+  allowed_paths: [src, include, test, "*.ino"]
+
+limits:
+  max_changed_files: 5
+  max_added_lines: 500
+  max_deleted_lines: 500
+  max_iterations: 5
+
+build:
+  command: python tools/sim_build.py
+  timeout: 60
+
+flash:
+  command: python tools/sim_flash.py
+  timeout: 60
+
+test:
+  mode: command
+  command: python tools/hil_test.py --simulate
+  timeout: 60
+  required: [UART, ADC, CAN_TX, CAN_RX]
+
+handoff:
+  use_notebook: false

@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Claude Code のローカル設定
+.claude/
+
+# Harness をこのディレクトリで試した場合の作業ファイル
+.copilot-harness/

@@ -1,0 +1,29 @@
+nvic_enable() の実装は正しく、NVIC 側は問題ありません。
+can_hw.h に宣言されている can_hw_enable_rx_interrupt() が can_init() から呼ばれておらず、
+CAN コントローラ側の RX FIFO0 メッセージペンディング割り込みが許可されていません。
+
+ACTION: PATCH
+RUN_ID: {RUN_ID}
+
+FILES:
+- src/can.cpp
+
+BEGIN_PATCH
+```diff
+--- a/src/can.cpp
++++ b/src/can.cpp
+@@ -17,5 +17,6 @@ void can_init(uint32_t bitrate)
+     can_hw_set_bitrate(bitrate);
+     can_hw_enable_tx();
+     can_hw_register_rx_callback(on_rx);
++    can_hw_enable_rx_interrupt();
+     nvic_enable(CAN_RX_IRQ_NUMBER);
+ }
+```
+END_PATCH
+
+SUMMARY:
+can_init() に can_hw_enable_rx_interrupt() の呼び出しを追加し、RX 割り込みを有効化。
+
+FINDING:
+CAN コントローラの RX 割り込みが未許可のため on_rx コールバックが呼ばれていなかった。

@@ -1,0 +1,12 @@
+STATE.md と TEST_RESULT.md を確認しました。CAN_TX は PASS、CAN_RX が RX_TIMEOUT で失敗しています。
+can_init() ではコールバック登録と NVIC 有効化を行っていますが、nvic_enable() の実装を確認する必要があります。
+
+**ACTION:** NEED_CONTEXT
+**RUN_ID:** {RUN_ID}
+
+FILES:
+- `src/nvic.cpp`
+- `src/interrupt.cpp`
+
+REASON:
+NVIC 有効化処理と割り込みハンドラ登録処理の実装確認が必要。
