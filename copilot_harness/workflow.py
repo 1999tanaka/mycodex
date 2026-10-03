@@ -22,6 +22,9 @@ from .response import NEED_CONTEXT, PATCH, parse_response
 from .util import HarnessError, deny_match, first_match, read_text, sha256_text, write_text
 
 
+PROMPT_MARKER = "回答は必ず次のどちらかの形式にしてください"  # NEXT_PROMPT.txt 固有の文
+
+
 def say(msg: str = "") -> None:
     print(msg, flush=True)
 
@@ -53,7 +56,7 @@ class Harness:
         files = {
             "STATE.md": render_state_md(self.cfg, st, changed),
             "SOURCE_CONTEXT.md": ctx.text,
-            "TEST_RESULT.md": render_test_result_md(st, st["build_excerpt"], st["flash_excerpt"], st["uart_excerpt"]),
+            "TEST_RESULT.md": render_test_result_md(self.cfg, st, st["build_excerpt"], st["flash_excerpt"], st["uart_excerpt"]),
             "NEXT_PROMPT.txt": render_next_prompt(self.cfg, st),
         }
         snap = self.run_dir(self.cfg.history_dir)
@@ -103,12 +106,37 @@ class Harness:
         if self.state["phase"] in (S.DONE, S.HUMAN_REVIEW_REQUIRED):
             say(f"\n[{self.state['phase']}] {self.state.next_action()}")
             return
-        h = self.cfg.handoff_dir
         say("\n次の操作:")
-        say(f"  1. Copilot に添付: {h / 'STATE.md'}, {h / 'SOURCE_CONTEXT.md'}, {h / 'TEST_RESULT.md'}")
-        say(f"     NEXT_PROMPT.txt の内容を貼り付け: {h / 'NEXT_PROMPT.txt'}")
-        say(f"  2. Copilot の回答全文を保存: {self.cfg.response_path}")
-        say("  3. python harness.py apply  (または watch で自動処理)")
+        say(f"  1. Copilot に {self.cfg.handoff_dir} の STATE.md / SOURCE_CONTEXT.md / TEST_RESULT.md を添付し、")
+        say("     NEXT_PROMPT.txt の内容を貼り付けて送信")
+        say("  2. Copilot の回答のコピーボタンを押して  python harness.py paste")
+        say("     (回答をファイルに保存した場合は  python harness.py apply --run)")
+
+    # ------------------------------------------------------------ paste
+    def save_response(self, text: str, *, force: bool = False) -> None:
+        """Copilot の回答を inbox/copilot_response.txt に保存する (paste コマンド用)。"""
+        text = text.replace("\r\n", "\n")
+        if not text.strip():
+            raise HarnessError("クリップボードが空です。Copilot の回答のコピーボタンを押してから実行してください。")
+        prompt_path = self.cfg.handoff_dir / "NEXT_PROMPT.txt"
+        prompt = read_text(prompt_path).replace("\r\n", "\n").strip() if prompt_path.exists() else ""
+        if not force and ((prompt and text.strip() == prompt) or PROMPT_MARKER in text):
+            raise HarnessError("クリップボードの内容は NEXT_PROMPT (Copilot への質問) のままです。\n"
+                               "  Copilot の回答の下にあるコピーボタンを押してから、もう一度実行してください。")
+        res = parse_response(text)
+        if res.action is None and not force:
+            raise HarnessError("クリップボードの内容は Copilot の回答ではないようです (ACTION 行がありません)。\n"
+                               "  このまま保存する場合は --force を付けてください。")
+        path = self.cfg.response_path
+        if path.exists():
+            old = read_text(path)
+            if old.strip() and sha256_text(old) not in self.state["processed_responses"] and old != text:
+                write_text(path.with_name("copilot_response.prev.txt"), old)
+                say("  未処理だった前回の回答を copilot_response.prev.txt に退避しました")
+        write_text(path, text)
+        say(f"Copilot の回答を保存しました: {path}")
+        say(f"  ACTION: {res.action or '?'} / RUN_ID: {res.run_id or '(なし)'} / "
+            f"FILES: {', '.join(res.files) or '-'} / {len(text):,} 文字")
 
     # ------------------------------------------------------------ apply
     def apply(self, *, allow_large: bool = False, ignore_run_id: bool = False, reprocess: bool = False) -> str | None:
@@ -199,12 +227,13 @@ class Harness:
             st.set_phase(S.HUMAN_REVIEW_REQUIRED, f"MAX_ITERATIONS ({max_iter}) に到達")
             st.save()
             raise HarnessError(f"HUMAN_REVIEW_REQUIRED: MAX_ITERATIONS ({max_iter}) に到達しました。")
-        engine = self.patch_engine()
+        self.patch_engine()  # 設定エラーを先に検出
 
         pp = parse_patch(res.patch)
         if not pp.errors:
             resolve_hunks(pp, self.root)
         v = validate_patch(pp, cfg, res.files or None)
+        engine = self.patch_engine(pp) if v.status != "REJECTED" else "python"
         for w in v.warnings:
             say(f"  warning: {w}")
         if v.status == "REJECTED":
@@ -253,16 +282,39 @@ class Harness:
         say(f"PATCH を適用しました: {', '.join(pp.paths)} (+{pp.added} -{pp.deleted})  RUN_ID {src_run} → {new_run}")
         say(f"  iteration {st['iteration']} / {cfg.get('limits.max_iterations')}  (engine: {engine})")
 
-    def patch_engine(self) -> str:
-        """patch.engine: auto (git があれば git、無ければ内蔵) / git / python。"""
+    def patch_engine(self, pp=None) -> str:
+        """patch.engine: auto (git があれば git、無ければ内蔵) / git / python。
+
+        auto では、UTF-8 以外 (Shift-JIS など) のファイルを変更する patch や、
+        新規ファイルを UTF-8/LF 以外で作る設定 (VBA) の場合は内蔵エンジンを使う。
+        git apply はバイト列で照合するため、Shift-JIS の日本語を含む行と一致できないため。
+        """
         eng = str(self.cfg.get("patch.engine", "auto") or "auto").lower()
         if eng not in ("auto", "git", "python"):
             raise HarnessError(f"patch.engine の値が不正です: {eng} (auto / git / python)")
         if eng == "auto":
-            return "git" if git_available() else "python"
+            if not git_available() or (pp is not None and self._needs_builtin_engine(pp)):
+                return "python"
+            return "git"
         if eng == "git" and not git_available():
             raise HarnessError("patch.engine: git ですが git が見つかりません。auto または python を指定してください。")
         return eng
+
+    def _needs_builtin_engine(self, pp) -> bool:
+        enc = str(self.cfg.get("patch.new_file_encoding") or "utf-8").lower().replace("_", "-")
+        eol = str(self.cfg.get("patch.new_file_eol") or "lf").lower()
+        for fp in pp.files:
+            if fp.is_new:
+                if enc not in ("utf-8", "utf8") or eol == "crlf":
+                    return True
+                continue
+            try:
+                (self.root / fp.path).read_bytes().decode("utf-8")
+            except UnicodeDecodeError:
+                return True
+            except OSError:
+                continue
+        return False
 
     def _check_patch(self, engine: str, pp, patch_file: Path, run_id: str):
         """git apply --check 相当。戻り値: (エラー行, 内蔵エンジンの結果)。"""
@@ -273,7 +325,8 @@ class Harness:
             if chk.returncode == 0:
                 return [], None
             return (chk.stderr or chk.stdout).strip().splitlines()[-8:] or ["(詳細不明)"], None
-        pres = pyapply.check(pp, self.root)
+        pres = pyapply.check(pp, self.root, new_encoding=str(self.cfg.get("patch.new_file_encoding") or "utf-8"),
+                             new_eol=str(self.cfg.get("patch.new_file_eol") or "lf"))
         write_text(log, "engine: python\n" + "\n".join(pres.messages) + "\n")
         return ([] if pres.ok else pres.messages), pres
 
@@ -384,8 +437,8 @@ class Harness:
             "Task:", st["task"] or "(未設定)", "",
             "Phase:", st["phase"] + (f" ({st['phase_reason']})" if st["phase_reason"] else ""), "",
             "Build:", st["build"], "",
-            "Flash:", st["flash"], "",
-            "Hardware:", hw, "",
+            *(["Flash:", st["flash"], ""] if self.cfg.get("flash.command") or st["flash"] not in ("NOT_RUN", "SKIPPED") else []),
+            ("Hardware:" if self.cfg.profile.name == "mcu" else "Test:"), hw, "",
             "Iterations:", f"{st['iteration']} / {self.cfg.get('limits.max_iterations')}", "",
             "Next Action:", st.next_action(),
         ]
@@ -396,7 +449,8 @@ class Harness:
             engine = self.patch_engine()
         except HarnessError as e:
             engine = str(e)
-        lines += ["", "Environment:", f"  YAML: {yaml_backend()} / {git} / patch engine: {engine}"]
+        lines += ["", "Environment:", f"  profile: {self.cfg.profile.name} ({self.cfg.profile.title})",
+                  f"  YAML: {yaml_backend()} / {git} / patch engine: {engine}"]
         return "\n".join(lines)
 
     # ------------------------------------------------------------ diff (git 不要のレビュー用)

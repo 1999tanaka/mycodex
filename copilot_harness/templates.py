@@ -1,26 +1,25 @@
-"""init で生成するファイルのテンプレート。"""
+"""init で生成するファイルのテンプレート (プロファイル別)。"""
 
-CONFIG_YAML = """\
+from __future__ import annotations
+
+import json
+
+from . import profiles
+from .profiles import TEMPLATE_MARKER  # noqa: F401  (互換のため再公開)
+
+_HEADER = """\
 # Local Coding Harness 設定 (v0.2)
+# プロファイル: {title}
 # パスはこのファイル (.copilot-harness/) からの相対、または project root からの相対。
 
-project:
-  root: ..
-  languages:
-    - cpp
-    - ino
-  # include 解決に使うディレクトリ
-  include_dirs:
-    - include
-    - src
+"""
 
+_SECURITY_HEAD = """\
 security:
   # Copilot の patch が変更してよいパス
-  allowed_paths:
-    - src
-    - include
-    - test
-    - "*.ino"
+"""
+
+_SECURITY_TAIL = """\
   # Copilot から変更不可 (Context にも含めない)
   forbidden_paths:
     - ".git/**"
@@ -30,6 +29,13 @@ security:
     - "*.pem"
     - "credential/**"
     - "secret/**"
+    # バイナリ (Excel ブック / フォームの .frx) は patch しない
+    - "*.xlsm"
+    - "*.xlsb"
+    - "*.xlsx"
+    - "*.xlam"
+    - "*.xls"
+    - "*.frx"
   # Context Builder から必ず除外 (patch でも変更不可)
   excluded_patterns:
     - ".env"
@@ -57,103 +63,21 @@ context:
   include_repo_map: true
 
 patch:
-  # auto: git があれば git apply、無ければ内蔵エンジン (標準ライブラリのみ) / git / python
+  # auto: git があれば git apply、無ければ内蔵エンジン (標準ライブラリのみ)。
+  #       UTF-8 以外 (Shift-JIS など) のファイルを変更する patch は内蔵エンジンで適用する
   engine: auto
+"""
 
-# build / flash / test は事前定義されたコマンドのみ実行する (shell は使わない)
-build:
-  command: >
-    arduino-cli compile
-    --fqbn arduino:avr:uno
-    .
-  timeout: 120
-
-flash:
-  # 空にすると SKIPPED 扱い。書込みツールの例:
-  #   Arduino (AVR/ESP32/RP2040): arduino-cli upload --fqbn <fqbn> -p COM4 .
-  #   PlatformIO               : pio run -t upload
-  #   STM32 (ST-LINK)          : STM32_Programmer_CLI -c port=SWD -w build/app.elf -v -rst
-  #   J-Link                   : JLink.exe -device <MCU> -if SWD -speed 4000 -autoconnect 1 -CommanderScript tools/flash.jlink
-  command: >
-    arduino-cli upload
-    --fqbn arduino:avr:uno
-    -p COM4
-    .
-  timeout: 60
-
-test:
-  # command: 外部スクリプトの標準出力から TEST:<NAME>:<PASS|FAIL>[:detail] を解析
-  # uart:    Harness が直接 UART を読む (pyserial 不要。ポート一覧: python harness.py ports)
-  mode: command
-  command: >
-    python tools/hil_test.py
-    --port COM5
-  timeout: 120
-  # 成功判定に必須のテスト名 (空なら出力された全テストが PASS であること)
-  required: []
-  log_excerpt_lines: 40
-  uart:
-    port: COM5
-    baudrate: 115200
-    timeout: 30
-    end_marker: "TEST:END"
-    boot_marker: ""
-    # ポートを開いた時の DTR/RTS (true = ON)。Arduino Uno 等は DTR ON で自動リセットされる
-    dtr: true
-    rts: true
-    # 開いた直後のリセット: none / dtr (Arduino AVR 等) / rts (ESP32 等)
-    reset: none
-    # 開いた後に MCU へ送る文字列 (例: "RUN\\n")。空なら送らない
-    send: ""
-    # flash 直後の USB 再接続待ち (秒)
-    open_retry: 5
-    # auto (pyserial があれば使用) / builtin (標準ライブラリのみ) / pyserial
-    backend: auto
-
+_HANDOFF = """
 handoff:
   # true: 静的情報は Copilot Notebook に置く / false: handoff に埋め込む
   use_notebook: false
   history_entries: 10
+  # Copilot の説明文 (REASON / SUMMARY / FINDING / SUSPECTS) の言語。空にすると指定しない
+  response_language: 日本語
 """
 
-TEMPLATE_MARKER = "<!-- harness:template -->"
-
-STATIC_FILES = {
-    "PROJECT.md": f"""{TEMPLATE_MARKER}
-# PROJECT
-
-(記入したら 1 行目の harness:template 行を削除してください。削除するまで handoff には含まれません)
-
-- 製品/目的:
-- 対象 MCU / ボード:
-- 開発環境 (arduino-cli / PlatformIO / STM32CubeIDE など):
-""",
-    "ARCHITECTURE.md": f"""{TEMPLATE_MARKER}
-# ARCHITECTURE
-
-- モジュール構成:
-- 割り込み / タスク構成:
-- 主要データフロー:
-""",
-    "HARDWARE.md": f"""{TEMPLATE_MARKER}
-# HARDWARE
-
-- MCU:
-- クロック:
-- ピンアサイン:
-- 通信 (UART / CAN / I2C / SPI) 設定:
-""",
-    "CODING_RULES.md": f"""{TEMPLATE_MARKER}
-# CODING RULES
-
-- 動的メモリ確保禁止
-- ISR 内でのブロッキング処理禁止
-- public API の変更禁止
-""",
-    "AGENT_RULES.md": """# AGENT RULES
-
-あなたは組み込みソフトウェア開発支援Agentです。
-
+_RULES_COMMON = """\
 STATE.mdを現在状態の唯一の正として扱ってください。
 
 VERIFIEDに記載された内容を
@@ -176,11 +100,43 @@ ACTION: NEED_CONTEXT
 修正可能な場合は
 ACTION: PATCH
 でunified diffを出力してください。
+"""
 
-存在しないAPI、関数、レジスタを
-推測して作らないでください。
-""",
-}
+
+def config_yaml(profile: str = "mcu", workbook: str = "Book1.xlsm") -> str:
+    p = profiles.get(profile)
+    parts = [
+        _HEADER.format(title=p.title),
+        p.project_yaml,
+        "\n",
+        _SECURITY_HEAD,
+        p.security_yaml,
+        _SECURITY_TAIL,
+        p.patch_yaml,
+        "\n",
+        p.pipeline_yaml,
+    ]
+    if p.extra_yaml:
+        parts += ["\n", p.extra_yaml.replace("{workbook}", json.dumps(workbook, ensure_ascii=False))]
+    parts.append(_HANDOFF)
+    return "".join(parts)
+
+
+def agent_rules(profile: str = "mcu") -> str:
+    p = profiles.get(profile)
+    extra = "\n".join(f"{r}\n" for r in p.extra_rules)
+    return f"# AGENT RULES\n\n{p.persona}\n\n{_RULES_COMMON}\n{extra}"
+
+
+def static_files(profile: str = "mcu") -> dict[str, str]:
+    files = dict(profiles.get(profile).static)
+    files["AGENT_RULES.md"] = agent_rules(profile)
+    return files
+
+
+# 互換: 既定 (mcu) プロファイルのテンプレート
+CONFIG_YAML = config_yaml("mcu")
+STATIC_FILES = static_files("mcu")
 
 HARNESS_GITIGNORE = """\
 # Harness の作業ファイル (commit 不要)

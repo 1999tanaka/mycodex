@@ -37,6 +37,8 @@ def parse_yaml(text: str):
 DEFAULT_CONFIG: dict[str, Any] = {
     "project": {
         "root": "..",
+        # mcu / python / vba / tool (STATE.md の見出し等に使用)
+        "profile": "mcu",
         "languages": ["cpp", "ino"],
         # 空なら languages から自動決定
         "source_extensions": [],
@@ -51,6 +53,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "forbidden_paths": [
             ".git/**", ".copilot-harness/**", ".env", "*.key", "*.pem",
             "credential/**", "secret/**",
+            "*.xlsm", "*.xlsb", "*.xlsx", "*.xlam", "*.xls", "*.frx",
         ],
         "excluded_patterns": [
             ".env", "*.key", "*.pem", "password*", "credential*", "*secret*", "private*",
@@ -78,8 +81,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "git_apply_args": ["--recount"],
         # 対象ファイルが CRLF の場合に patch 側も CRLF へ合わせる
         "match_line_endings": True,
+        # 新規作成ファイルの文字コード / 改行 (VBA は cp932 + crlf)
+        "new_file_encoding": "utf-8",
+        "new_file_eol": "lf",
     },
-    "build": {"command": "", "timeout": 120, "cwd": "."},
+    # required: false なら command 未設定時に SKIPPED として先へ進む
+    "build": {"command": "", "timeout": 120, "cwd": ".", "required": True},
     "flash": {"command": "", "timeout": 60, "cwd": "."},
     "test": {
         # command: 外部テストスクリプトの出力を解析 / uart: Harness が直接 UART を読む
@@ -104,10 +111,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "backend": "auto",
         },
     },
+    "vba": {
+        "workbook": "Book1.xlsm",
+        "src": "src/vba",
+        "test_macro": "HarnessTests.RunAll",
+        "timeout": 180,
+    },
     "handoff": {
         # Notebook を使わない場合は static/ の内容を handoff に埋め込む
         "use_notebook": False,
         "history_entries": 10,
+        # Copilot の説明文 (SUMMARY 等) の言語。空なら指定しない
+        "response_language": "日本語",
     },
 }
 
@@ -167,11 +182,23 @@ class Config:
             "python": [".py"],
             "py": [".py"],
             "rust": [".rs"],
+            "vba": [".bas", ".cls", ".frm"],
+            "vbscript": [".vbs"],
+            "powershell": [".ps1", ".psm1", ".psd1"],
+            "batch": [".bat", ".cmd"],
+            "javascript": [".js", ".mjs", ".cjs", ".jsx"],
+            "typescript": [".ts", ".tsx"],
+            "csharp": [".cs"],
         }
         out: set[str] = set()
         for lang in self.list("project.languages"):
             out.update(e.lower() for e in lang_map.get(str(lang).lower(), []))
         return out or {".c", ".h", ".cpp", ".hpp", ".ino"}
+
+    @property
+    def profile(self):
+        from . import profiles
+        return profiles.get(self.get("project.profile", "mcu"))
 
     def context_exclusions(self) -> list[str]:
         return self.list("security.excluded_patterns") + self.list("security.forbidden_paths")

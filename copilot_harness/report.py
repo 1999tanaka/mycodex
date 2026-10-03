@@ -41,10 +41,11 @@ def render_state_md(cfg: Config, state: State, changed: list[str]) -> str:
     ]
     if state["phase_reason"]:
         lines.append(f"REASON: {state['phase_reason']}")
+    lines += ["", "# BUILD", "", f"{state['build']}{res_note}", ""]
+    if _show_flash(cfg, state):
+        lines += ["# FLASH", "", state["flash"], ""]
     lines += [
-        "", "# BUILD", "", f"{state['build']}{res_note}", "",
-        "# FLASH", "", state["flash"], "",
-        "# HARDWARE TEST", "", *tests_lines(state), "",
+        f"# {cfg.profile.test_label}", "", *tests_lines(state), "",
         "# VERIFIED", "", *_bullets(state["verified"]), "",
         "# CURRENT FINDING", "", state["finding"] or "(なし)", "",
         "# CHANGED FILES", "", *_bullets(changed), "",
@@ -76,6 +77,10 @@ def render_state_md(cfg: Config, state: State, changed: list[str]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _show_flash(cfg: Config, state: State) -> bool:
+    return bool(cfg.get("flash.command")) or state["flash"] not in ("NOT_RUN", "SKIPPED")
+
+
 def _default_objective(state: State) -> str:
     if state["phase"] == DONE:
         return "完了 (人によるレビュー待ち)"
@@ -100,12 +105,13 @@ def _history_line(h: dict) -> str:
     return " ".join(p for p in parts if p)
 
 
-def render_test_result_md(state: State, build_log: str, flash_log: str, uart_log: str) -> str:
-    lines = [
-        "# RUN_ID", "", state["results_run_id"] or state["run_id"], "",
-        "# BUILD", "", state["build"], "",
-        "# FLASH", "", state["flash"], "",
-        "# BOOT", "", state["boot"], "",
+def render_test_result_md(cfg: Config, state: State, build_log: str, flash_log: str, uart_log: str) -> str:
+    lines = ["# RUN_ID", "", state["results_run_id"] or state["run_id"], "", "# BUILD", "", state["build"], ""]
+    if _show_flash(cfg, state):
+        lines += ["# FLASH", "", state["flash"], ""]
+    if cfg.profile.name == "mcu" or state["boot"] not in ("NOT_RUN",):
+        lines += ["# BOOT", "", state["boot"], ""]
+    lines += [
         "# TESTS", "", *tests_lines(state), "",
         "# FAILURE", "", *(state["failures"] or ["(なし)"]), "",
     ]
@@ -114,7 +120,7 @@ def render_test_result_md(state: State, build_log: str, flash_log: str, uart_log
     if state["flash"] == "FAIL" and flash_log:
         lines += ["# FLASH LOG (抜粋)", "", "```text", flash_log, "```", ""]
     if uart_log:
-        lines += ["# UART LOG (抜粋)", "", "```text", uart_log, "```", ""]
+        lines += [f"# {cfg.profile.log_label} (抜粋)", "", "```text", uart_log, "```", ""]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -127,7 +133,7 @@ RUN_ID: {run_id}
 FILES:
 - <必要なファイルのパス>
 REASON:
-<必要な理由>
+<必要な理由{lang_note}>
 
 修正可能な場合:
 ACTION: PATCH
@@ -141,18 +147,18 @@ BEGIN_PATCH
  <unified diff>
 END_PATCH
 SUMMARY:
-<変更内容の要約>
+<変更内容の要約{lang_note}>
 FINDING:
-<現時点で判明した原因 (任意)>
+<現時点で判明した原因{lang_note} (任意)>
 SUSPECTS:
-- <残っている疑い (任意)>
+- <残っている疑い{lang_note} (任意)>
 
 ルール:
 - diff のパスは SOURCE_CONTEXT.md の `# FILE:` に書かれたパスをそのまま使う (.ino も元のファイル名のまま)
 - BEGIN_PATCH と END_PATCH の間には unified diff 以外を書かない
 - コンテキスト行は SOURCE_CONTEXT.md の内容と一字一句一致させる
 - 変更は最小限にする。shell コマンドや手順の実行指示は書かない (Harness は実行しない)
-"""
+{lang_rule}"""
 
 
 def render_next_prompt(cfg: Config, state: State) -> str:
@@ -168,6 +174,9 @@ def render_next_prompt(cfg: Config, state: State) -> str:
         "修正可能な場合:", "ACTION: PATCH", "",
         "として回答してください。", "",
     ]
+    lang = str(cfg.get("handoff.response_language") or "").strip()
+    if lang:
+        lines += [f"説明文 (REASON / SUMMARY / FINDING / SUSPECTS) は必ず{lang}で書いてください。", ""]
     if state["phase"] == DONE:
         lines = [f"RUN_ID: {run_id}", "", "このタスクは Harness 判定で完了しています。Copilot への送信は不要です。", ""]
         return "\n".join(lines)
@@ -181,5 +190,10 @@ def render_next_prompt(cfg: Config, state: State) -> str:
             text = read_text(rules).replace("<!-- harness:template -->", "").strip()
             if text:
                 lines += ["---", "[AGENT_RULES]", "", text, "---", ""]
-    lines.append(RESPONSE_FORMAT.format(run_id=run_id))
+    lines.append(RESPONSE_FORMAT.format(
+        run_id=run_id,
+        lang_note=f" ({lang})" if lang else "",
+        lang_rule=(f"- REASON / SUMMARY / FINDING / SUSPECTS / NEXT_OBJECTIVE の文章は{lang}で書く"
+                   " (見出し語・ファイルパス・コード・diff はそのまま)\n") if lang else "",
+    ))
     return "\n".join(lines)

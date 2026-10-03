@@ -187,6 +187,59 @@ def parse_test_output(text: str, required: list[str], boot_marker: str = "") -> 
     return oc
 
 
+# ---------------------------------------------------------------- 終了コード判定 (pytest / unittest など)
+PYTEST_FAIL_RE = re.compile(r"^(FAILED|ERROR) (\S+?)(?: - (.*))?\s*$", re.M)
+UNITTEST_FAIL_RE = re.compile(r"^(FAIL|ERROR): (\S+) \(([^)]*)\)", re.M)
+PYTEST_SUMMARY_RE = re.compile(r"^=+ (.*?\d+ (?:passed|failed|error|errors|skipped).*?) in [\d.]+s", re.M)
+UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests? in", re.M)
+_EXC_LINE_RE = re.compile(r"^\s*[\w.]*(Error|Exception|Failure)\b.*")
+
+
+def _unittest_detail(lines: list[str], start: int) -> str:
+    """unittest の FAIL/ERROR ブロックから最後の例外行を取り出す。"""
+    detail = ""
+    for ln in lines[start + 1:]:
+        if ln.startswith(("=====", "Ran ")) or (ln.startswith(("FAIL: ", "ERROR: ")) and detail):
+            break
+        if _EXC_LINE_RE.match(ln):
+            detail = ln.strip()
+    return detail
+
+
+def parse_exitcode_output(text: str, returncode: int | None, required: list[str]) -> TestOutcome:
+    """終了コードで成否を判定し、pytest / unittest の失敗テスト名をログから抽出する。
+
+    出力に TEST:<NAME>:<PASS|FAIL> 行があればそれも使う。
+    """
+    text = text or ""
+    if TEST_LINE_RE.search(text):
+        oc = parse_test_output(text, required)
+        if returncode not in (0, None) and oc.status == PASS:
+            oc.failures.append(f"TEST_COMMAND: exit code {returncode}")
+            oc.status = FAIL
+        return oc
+    oc = TestOutcome(output=text, boot=NOT_RUN)
+    m = PYTEST_SUMMARY_RE.search(text)
+    ran = UNITTEST_RAN_RE.search(text)
+    summary = m.group(1) if m else (f"{ran.group(1)} tests" if ran else "")
+    if returncode == 0:
+        oc.tests["ALL"] = {"status": "PASS", "detail": summary or "exit code 0"}
+        oc.status = PASS
+        return oc
+    lines = text.replace("\r\n", "\n").split("\n")
+    for m in PYTEST_FAIL_RE.finditer(text):
+        oc.tests[m.group(2)] = {"status": "FAIL", "detail": (m.group(3) or m.group(1)).strip()}
+    for i, ln in enumerate(lines):
+        um = UNITTEST_FAIL_RE.match(ln)
+        if um:
+            oc.tests[um.group(3)] = {"status": "FAIL", "detail": _unittest_detail(lines, i) or um.group(1)}
+    if not oc.tests:
+        oc.tests["TEST_COMMAND"] = {"status": "FAIL", "detail": f"exit code {returncode}"}
+    oc.failures = [f"{name}: {t['detail']}" for name, t in oc.tests.items()]
+    oc.status = FAIL
+    return oc
+
+
 def _pulse_reset(ser, mode: str) -> None:
     """MCU をリセットする (USB-UART の DTR/RTS は True で信号 LOW)。
 

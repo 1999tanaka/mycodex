@@ -9,7 +9,8 @@ from pathlib import Path
 
 from . import __version__
 from .config import Config
-from .templates import CONFIG_YAML, HARNESS_GITIGNORE, STATIC_FILES
+from . import profiles
+from .templates import HARNESS_GITIGNORE, config_yaml, static_files
 from .util import HarnessError, write_text
 
 CODE_DIR = Path(__file__).resolve().parent          # copilot_harness/
@@ -61,9 +62,26 @@ def cmd_init(args) -> int:
 
     for sub in SUBDIRS:
         (target / sub).mkdir(exist_ok=True)
+    project_root = target.parent
+    cfg_path = target / "config.yaml"
+    if cfg_path.exists() and not args.force:
+        try:
+            profile = Config.load(target).get("project.profile", "mcu")
+        except HarnessError:
+            profile = "mcu"
+        print(f"既存の config.yaml を使います (profile: {profile})。作り直す場合は --force")
+    elif args.profile == "auto":
+        profile, reason = profiles.detect(project_root)
+        print(f"プロファイルを自動判定しました: {profile} ({profiles.get(profile).title})")
+        print(f"  理由: {reason}")
+        print("  違う場合は --profile mcu / python / vba / tool を付けて --force で作り直してください")
+    else:
+        profile = args.profile
+        print(f"プロファイル: {profile} ({profiles.get(profile).title})")
+
     created = []
-    files = {"config.yaml": CONFIG_YAML, ".gitignore": HARNESS_GITIGNORE}
-    files.update({f"static/{k}": v for k, v in STATIC_FILES.items()})
+    files = {"config.yaml": config_yaml(profile, profiles.find_workbook(project_root)), ".gitignore": HARNESS_GITIGNORE}
+    files.update({f"static/{k}": v for k, v in static_files(profile).items()})
     for rel, text in files.items():
         p = target / rel
         if not p.exists() or args.force:
@@ -76,10 +94,14 @@ def cmd_init(args) -> int:
         print(f"  created: {rel}")
     print(f"\n初期化しました: {target}")
     print("次の手順:")
-    print(f"  1. {target / 'config.yaml'} の build / flash / test コマンドを環境に合わせて編集")
+    print(f"  1. {cfg_path} を環境に合わせて編集 (build / test コマンドなど)")
+    if profile == "vba":
+        print("     Excel VBA: 対象ブック (vba.workbook) を確認し、python harness.py vba-export でモジュールを書き出す")
+        print(f"     テスト用モジュールのひな形: {target / 'copilot_harness' / 'assets' / 'HarnessTests.bas'}")
+        print("     (src/vba にコピーすると build でブックへ取り込まれます)")
     print(f"  2. {target / 'static'} の PROJECT.md 等を記入 (任意)")
     print(f"  3. cd {target}")
-    print('     python harness.py start "タスク内容" --keywords CAN,RX')
+    print('     python harness.py start "タスク内容" -k キーワード')
     return 0
 
 
@@ -117,6 +139,28 @@ def cmd_apply(args) -> int:
     return 0
 
 
+def cmd_paste(args) -> int:
+    from .clipboard import ClipboardError, read_clipboard
+    from .execute import do_run
+    h = _harness(args)
+    try:
+        text = read_clipboard()
+    except ClipboardError as e:
+        raise HarnessError(str(e)) from e
+    h.save_response(text, force=args.force)
+    if args.save_only:
+        print("\n次: python harness.py apply --run  (watch 実行中なら自動で処理されます)")
+        return 0
+    print()
+    action = h.apply(allow_large=args.allow_large, ignore_run_id=args.ignore_run_id)
+    if action == "PATCH":
+        if args.no_run:
+            print("\n次: python harness.py run  (build → flash → test)")
+            return 0
+        return 0 if do_run(h) else 1
+    return 0
+
+
 def cmd_build(args) -> int:
     from .execute import do_build
     h = _harness(args)
@@ -134,12 +178,41 @@ def cmd_flash(args) -> int:
 
 
 def cmd_test(args) -> int:
-    from .execute import do_test, evaluate
+    from .execute import PENDING, do_test, finish
     h = _harness(args)
-    ok = do_test(h, force=args.force)
-    evaluate(h)
-    h.generate_handoff()
-    return 0 if ok else 1
+    if do_test(h, force=args.force) == PENDING:
+        return 0
+    return 0 if finish(h) else 1
+
+
+def cmd_result(args) -> int:
+    """手動テストの結果を入力する (test.mode: manual)。"""
+    from .execute import do_result
+    h = _harness(args)
+    if args.passed is not None:
+        text = f"TEST:MANUAL:PASS:{args.passed}" if args.passed else "TEST:MANUAL:PASS"
+    elif args.failed:
+        text = f"TEST:MANUAL:FAIL:{args.failed}"
+    elif args.file:
+        text = Path(args.file).read_text(encoding="utf-8-sig")
+    else:
+        from .clipboard import ClipboardError, read_clipboard
+        try:
+            text = read_clipboard()
+        except ClipboardError as e:
+            raise HarnessError(str(e)) from e
+    return 0 if do_result(h, text) else 1
+
+
+def cmd_vba_export(args) -> int:
+    """Excel ブックの VBA モジュールを src/vba へ書き出す。"""
+    from .builtin_cmds import vba
+    h = _harness(args)
+    res = vba(h, "export", "vba-export")
+    print(res.output.strip() or res.reason)
+    if res.status != "PASS":
+        raise HarnessError(f"VBA の書き出しに失敗しました: {res.reason}")
+    return 0
 
 
 def cmd_run(args) -> int:
@@ -240,6 +313,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("init", help=".copilot-harness/ を初期化")
     s.add_argument("--project", help="対象プロジェクトのルート (省略時はカレント)")
+    s.add_argument("--profile", choices=["auto", *profiles.PROFILES], default="auto",
+                   help="用途: auto (ファイルから自動判定) / mcu / python / vba / tool")
     s.add_argument("--force", action="store_true", help="config.yaml / static を上書き")
     s.set_defaults(func=cmd_init)
 
@@ -262,14 +337,32 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--reprocess", action="store_true", help="処理済みの回答を再処理")
     s.set_defaults(func=cmd_apply)
 
+    s = sub.add_parser("paste", help="クリップボードの Copilot の回答を inbox に保存し apply → run (PATCH 時) まで実行")
+    s.add_argument("--save-only", action="store_true", help="inbox に保存するだけ (watch と併用する場合)")
+    s.add_argument("--no-run", action="store_true", help="PATCH 適用後に run しない")
+    s.add_argument("--force", action="store_true", help="回答の形式チェックをせずに保存")
+    s.add_argument("--allow-large", action="store_true", help="人の判断で変更量制限超過を許可")
+    s.add_argument("--ignore-run-id", action="store_true", help="RUN_ID 不一致を無視")
+    s.set_defaults(func=cmd_paste)
+
     s = sub.add_parser("build", help="build を実行")
     s.set_defaults(func=cmd_build)
-    s = sub.add_parser("flash", help="MCU へ書込み")
+    s = sub.add_parser("flash", help="マイコンへ書込み (flash.command 未設定なら省略)")
     s.add_argument("--force", action="store_true", help="BUILD PASS 前でも実行")
     s.set_defaults(func=cmd_flash)
-    s = sub.add_parser("test", help="hardware test を実行")
+    s = sub.add_parser("test", help="テストを実行 (test.mode に従う)")
     s.add_argument("--force", action="store_true", help="FLASH PASS 前でも実行")
     s.set_defaults(func=cmd_test)
+    s = sub.add_parser("result", help="手動テストの結果を入力 (test.mode: manual)。既定はクリップボードの TEST 行")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--paste", action="store_true", help="クリップボードの TEST:<名前>:<PASS|FAIL> 行を取り込む (既定)")
+    g.add_argument("--file", help="TEST 行を書いたファイルを取り込む")
+    g.add_argument("--pass", dest="passed", nargs="?", const="", help="全テスト OK (任意で詳細)")
+    g.add_argument("--fail", dest="failed", help="NG の内容")
+    s.set_defaults(func=cmd_result)
+    s = sub.add_parser("vba-export", help="Excel ブックの VBA モジュールを src/vba へ書き出す (Excel 必須)")
+    s.set_defaults(func=cmd_vba_export)
+
     s = sub.add_parser("run", help="build → flash → test → 判定 → handoff 生成")
     s.set_defaults(func=cmd_run)
     s = sub.add_parser("next", help="現在状態から handoff/ を再生成")

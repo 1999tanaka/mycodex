@@ -115,9 +115,13 @@ def _apply_file(fp: FilePatch, lines: list[str], eol: str) -> tuple[list[str] | 
     return out, ""
 
 
-def check(pp: ParsedPatch, root: Path) -> ApplyResult:
-    """git apply --check 相当。適用後の内容を outputs に保持する (書き込みはしない)。"""
+def check(pp: ParsedPatch, root: Path, new_encoding: str = "utf-8", new_eol: str = "lf") -> ApplyResult:
+    """git apply --check 相当。適用後の内容を outputs に保持する (書き込みはしない)。
+
+    new_encoding / new_eol は新規作成ファイルに使う (VBA モジュールは cp932 + crlf)。
+    """
     res = ApplyResult()
+    nl = "\r\n" if str(new_eol).lower() == "crlf" else "\n"
     for fp in pp.files:
         target = root / fp.path
         if fp.is_new:
@@ -128,8 +132,11 @@ def check(pp: ParsedPatch, root: Path) -> ApplyResult:
             if any(tag != "+" for tag, _, _ in ents):
                 res.messages.append(f"{fp.path}: 新規ファイルの hunk に + 以外の行があります")
                 continue
-            text = "".join(t + ("" if nonl else "\n") for _, t, nonl in ents)
-            res.outputs[fp.path] = text.encode("utf-8")
+            text = "".join(t + ("" if nonl else nl) for _, t, nonl in ents)
+            try:
+                res.outputs[fp.path] = text.encode(new_encoding)
+            except (UnicodeEncodeError, LookupError) as e:
+                res.messages.append(f"{fp.path}: 新規ファイルを {new_encoding} で保存できません ({e})")
             continue
         try:
             text, enc = decode(target.read_bytes())

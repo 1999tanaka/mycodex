@@ -1,0 +1,6 @@
+# VBA モジュール (Shift-JIS + CRLF) と PowerShell スクリプトは改行・文字コードを変換しない
+*.bas -text
+*.cls -text
+*.frm -text
+*.frx binary
+copilot_harness/assets/*.ps1 -text

@@ -20,6 +20,7 @@ PATCH_APPLIED = "PATCH_APPLIED"
 BUILD_FAILED = "BUILD_FAILED"
 FLASH_FAILED = "FLASH_FAILED"
 TEST_FAILED = "TEST_FAILED"
+WAITING_TEST = "WAITING_TEST_RESULT"
 DONE = "DONE"
 HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
 
@@ -36,6 +37,7 @@ NEXT_ACTION = {
     BUILD_FAILED: "handoff/ を Copilot へ渡す (build error)",
     FLASH_FAILED: "書込み環境 (ポート/接続) を確認し python harness.py flash を再実行",
     TEST_FAILED: "handoff/ を Copilot へ渡す (test failure)",
+    WAITING_TEST: "テストを実行し、結果を python harness.py result --paste / --pass / --fail で入力",
     DONE: "python harness.py diff (または git diff) で変更をレビューし、人が commit してください",
     HUMAN_REVIEW_REQUIRED: "人によるレビューが必要です (status の理由を確認)",
 }
