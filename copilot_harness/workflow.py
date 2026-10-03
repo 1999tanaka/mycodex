@@ -407,8 +407,11 @@ class Harness:
 
     # ------------------------------------------------------------ note / status
     def note(self, *, verified=(), finding=None, suspects=(), clear_suspects=False, constraints=(),
-             objective=None, keywords=(), resume=False, reset_iterations=False, clear_requested=False) -> None:
+             objective=None, keywords=(), resume=False, reset_iterations=False, clear_requested=False,
+             task=None) -> None:
         st = self.state
+        if task is not None and task.strip():
+            st["task"] = task.strip()  # 依頼内容の変更 (履歴や修正回数は保持)
         st["verified"] = list(dict.fromkeys(st["verified"] + list(verified)))
         if finding is not None:
             st["finding"] = finding

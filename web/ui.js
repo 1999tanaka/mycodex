@@ -9,11 +9,11 @@ const PHASE_LABEL = {
 };
 const STAGE_LABEL = { build: "ビルド (コンパイル)", flash: "書込み", test: "動作テスト" };
 const NEXT_LABEL = {
-  NO_TASK: "やりたいことを入力して、タスクを開始する",
-  INIT: "やりたいことを入力して、タスクを開始する",
-  WAITING_COPILOT: "Copilot に相談する (左のカードの 1〜4)",
-  BUILD_FAILED: "エラー内容を Copilot に伝えて直してもらう (左のカードの 1〜4)",
-  TEST_FAILED: "テスト結果を Copilot に伝えて直してもらう (左のカードの 1〜4)",
+  NO_TASK: "Copilot に作ってほしいもの・直してほしいことを入力して、タスクを開始する",
+  INIT: "Copilot に作ってほしいもの・直してほしいことを入力して、タスクを開始する",
+  WAITING_COPILOT: "Copilot に相談する (左のカードの ②〜⑤)",
+  BUILD_FAILED: "エラー内容を Copilot に伝えて直してもらう (左のカードの ②〜⑤)",
+  TEST_FAILED: "テスト結果を Copilot に伝えて直してもらう (左のカードの ②〜⑤)",
   FLASH_FAILED: "接続を確認して、もう一度ビルド・テストする",
   PATCH_APPLIED: "ビルドとテストを実行する",
   WAITING_TEST_RESULT: "ビルドとテストをして、結果を入力する",
@@ -22,6 +22,16 @@ const NEXT_LABEL = {
 };
 
 // ------------------------------------------------------------ 共通の描画
+/** Copilot がまだ修正していない最初の相談か (今のプログラムのテスト失敗は「異常」ではない) */
+function isFirstConsult() {
+  return (state.phase === "TEST_FAILED" || state.phase === "BUILD_FAILED") && !state.iteration;
+}
+
+function phaseLabel() {
+  if (isFirstConsult()) return PHASE_LABEL.WAITING_COPILOT;
+  return PHASE_LABEL[state.phase] || state.phase;
+}
+
 function render() {
   if (!state) return;
   renderStatusbar();
@@ -38,10 +48,10 @@ function renderStatusbar() {
     return;
   }
   const phase = s.phase;
-  const cls = phase === "DONE" ? "ok" : /FAILED|REVIEW/.test(phase) ? "ng" : "";
+  const cls = phase === "DONE" ? "ok" : /FAILED|REVIEW/.test(phase) && !isFirstConsult() ? "ng" : "";
   $("statusbar").innerHTML = [
-    `<span class="chip phase ${cls}">${esc(PHASE_LABEL[phase] || phase)}</span>`,
-    s.task ? `<span class="chip">やりたいこと: ${esc(s.task)}</span>` : "",
+    `<span class="chip phase ${cls}">${esc(phaseLabel())}</span>`,
+    
     s.run_id ? `<span class="chip">RUN_ID ${esc(s.run_id)}</span>` : "",
     s.task ? `<span class="chip">修正回数 ${s.iteration} / ${s.max_iterations}</span>` : "",
     `<span class="chip">${esc(s.profile_title)}</span>`,
@@ -57,14 +67,17 @@ function renderNextCard() {
       <p>「ファイル編集」タブで .copilot-harness/config.yaml を直してください。</p>`;
     return;
   }
+  let requestIsStep = false; // Copilot に相談するカードでは「① 依頼を書く」として手順に含める
   switch (s.phase) {
     case "NO_TASK": return cardTask(card);
-    case "WAITING_TEST_RESULT": return cardTestResult(card);
-    case "DONE": return cardDone(card);
-    case "HUMAN_REVIEW_REQUIRED": return cardReview(card);
-    case "PATCH_APPLIED": return cardPatched(card);
-    default: return cardCopilot(card);
+    case "WAITING_TEST_RESULT": cardTestResult(card); break;
+    case "DONE": cardDone(card); break;
+    case "HUMAN_REVIEW_REQUIRED": cardReview(card); break;
+    case "PATCH_APPLIED": cardPatched(card); break;
+    default: cardCopilot(card); requestIsStep = true;
   }
+  if (!requestIsStep) card.insertAdjacentHTML("afterbegin", requestBox());
+  bindRequestBox();
 }
 
 // ------------------------------------------------------------ 初期化
@@ -82,11 +95,20 @@ function cardInit(card) {
 }
 
 // ------------------------------------------------------------ タスク入力
+const TASK_PLACEHOLDER = "例) 消費税の計算を 8% から 10% にしてほしい\n" +
+  "例) CSV を読み込んで、月ごとの合計を表示する機能を追加してほしい\n" +
+  "例) CAN の受信がタイムアウトする不具合を直してほしい";
+
 function taskFormHtml() {
   const runDefault = state.profile === "python" ? "checked" : "";
   return `
-    <label class="field" for="t-task">やりたいこと</label>
-    <textarea id="t-task" placeholder="例: 消費税の計算を 10% にする / CAN の受信がタイムアウトする不具合を直す"></textarea>
+    <label class="field" for="t-task">Copilot に作ってほしいもの・直してほしいこと</label>
+    <textarea id="t-task" class="task-input" placeholder="${esc(TASK_PLACEHOLDER)}"></textarea>
+    <ul class="tight small muted">
+      <li>何を・どう変えたいか (今どうなっていて、どうなってほしいか)</li>
+      <li>エラーが出ているなら、そのメッセージ</li>
+      <li>入力と出力 (どのファイルを読んで、何を表示・保存するか)</li>
+    </ul>
     <label class="field" for="t-kw">関係しそうな言葉 (任意・カンマ区切り)</label>
     <input type="text" id="t-kw" placeholder="例: tax, 消費税, calc">
     <label class="field" for="t-cons">守ってほしいこと (任意・1 行に 1 つ)</label>
@@ -98,7 +120,7 @@ function taskFormHtml() {
 function bindTaskForm() {
   $("b-start").onclick = () => {
     const task = $("t-task").value.trim();
-    if (!task) return toast("やりたいことを入力してください");
+    if (!task) return toast("Copilot に作ってほしいもの・直してほしいことを入力してください");
     const args = ["start", task];
     $("t-kw").value.split(/[,、\s]+/).filter(Boolean).forEach((k) => args.push("-k", k));
     $("t-cons").value.split("\n").map((x) => x.trim()).filter(Boolean).forEach((c) => args.push("-c", c));
@@ -115,16 +137,64 @@ function bindTaskForm() {
 }
 
 function cardTask(card) {
-  card.innerHTML = `<h2>やりたいことを入力してください</h2>
-    <p class="lead">Copilot に渡す資料 (関係するソースや状態) を自動で作ります。</p>${taskFormHtml()}`;
+  card.innerHTML = `<h2>① Copilot に作ってほしいもの・直してほしいことを書く</h2>
+    <p class="lead">ここに書いた内容が Copilot への依頼の中心になります。具体的に書くほど、良い答えが返ってきます。
+      「タスクを開始」を押すと、Copilot に渡す資料 (関係するプログラムや今の状態) を自動で作ります。</p>
+    <p class="flow small">このあとの流れ: ② Copilot を開く → ③ 資料ファイルを添付 → ④ 依頼文を送信 → ⑤ 回答を反映</p>
+    ${taskFormHtml()}`;
   bindTaskForm();
+}
+
+// ------------------------------------------------------------ あなたの依頼 (全カード共通の先頭部分)
+function requestBox() {
+  return `
+    <div class="request">
+      <div class="request-head">
+        <span class="request-label">あなたの依頼 (Copilot に作ってほしいもの・直してほしいこと)</span>
+        <button class="btn small" id="b-edit-task">依頼を書き直す</button>
+      </div>
+      <div class="request-text" id="request-text">${esc(state.task)}</div>
+      <div id="task-edit" hidden>
+        <textarea id="task-edit-text" class="task-input">${esc(state.task)}</textarea>
+        <div class="row">
+          <button class="btn primary small" id="b-save-task">保存して資料を作り直す</button>
+          <button class="btn ghost small" id="b-cancel-task">やめる</button>
+        </div>
+        <p class="muted small">書き直した依頼は、次に Copilot に送る資料に反映されます (今の修正は残ります)。</p>
+      </div>
+    </div>`;
+}
+
+function bindRequestBox() {
+  if (!$("b-edit-task")) return;
+  $("b-edit-task").onclick = () => {
+    $("task-edit").hidden = false;
+    $("request-text").hidden = true;
+    $("b-edit-task").hidden = true;
+    $("task-edit-text").focus();
+  };
+  $("b-cancel-task").onclick = () => render();
+  $("b-save-task").onclick = () => {
+    const t = $("task-edit-text").value.trim();
+    if (!t) return toast("依頼内容を入力してください");
+    runAction("依頼の書き直し", () => {
+      const r = pyJson("run_cli", JSON.stringify(["note", "--task", t]));
+      const r2 = pyJson("run_cli", JSON.stringify(["next"]));
+      r.output += "\n" + r2.output;
+      return r;
+    });
+  };
 }
 
 // ------------------------------------------------------------ Copilot に相談
 function failureBox() {
   const s = state;
-  if (s.phase === "BUILD_FAILED") return `<p class="reason">ビルドでエラーが出ました。エラー内容を Copilot に伝えて直してもらいます。\n${esc(s.failures.join("\n"))}</p>`;
-  if (s.phase === "TEST_FAILED") return `<p class="reason">テストが失敗しました。結果を Copilot に伝えて直してもらいます。\n${esc(s.failures.join("\n"))}</p>`;
+  // 最初の相談 (Copilot がまだ修正していない) では、今のプログラムのテスト結果は資料に入れるだけで表示しない
+  if ((s.phase === "BUILD_FAILED" || s.phase === "TEST_FAILED") && s.iteration > 0) {
+    const what = s.phase === "BUILD_FAILED" ? "ビルドでエラーが出ました" : "テストに合格しませんでした";
+    return `<div class="reason">Copilot の修正を試しましたが、${what}。結果は資料に入れてあるので、もう一度 ②〜⑤ を行ってください。
+      <details><summary class="small">詳しい結果を見る</summary><pre class="log">${esc(s.failures.join("\n"))}</pre></details></div>`;
+  }
   if (s.phase === "FLASH_FAILED") return `<p class="reason">書込みに失敗しました。多くの場合はプログラムではなく接続の問題です (USB ケーブル、COM ポート、シリアルモニタを開いたままにしていないか)。確認してから下の「もう一度試す」を押してください。\n${esc(s.failures.join("\n"))}</p>
       <div class="row"><button class="btn" id="b-retry">もう一度ビルド・テストする</button></div>`;
   return "";
@@ -136,20 +206,38 @@ function cardCopilot(card) {
   const bundleLen = Object.values(s.handoff).reduce((n, t) => n + t.length, 0);
   card.innerHTML = `
     <h2>Copilot に相談します</h2>
-    <p class="lead">次の 4 つを順番に行ってください。資料は自動で作ってあります。</p>
+    <p class="lead">①〜⑤ を順番に行ってください。</p>
     ${failureBox()}
     <ol class="steps">
+      <li><div class="step-title">依頼を書く <span class="done-mark">✓ 入力済み</span></div>
+        ${requestBox()}</li>
       <li><div class="step-title">Copilot を開く</div>
         <div class="row"><button class="btn" id="b-copilot">Copilot を開く (新しいタブ)</button></div>
-        <p class="muted small">Windows の Copilot アプリを使う場合は、アプリで「新しいチャット」を開いてください。</p></li>
-      <li><div class="step-title">資料ファイル 3 つを Copilot に添付する</div>
-        <div class="row"><button class="btn" id="b-download">3 つのファイルをダウンロード</button></div>
-        <p class="muted small">Copilot の入力欄の「＋」→「画像またはファイルを追加」で、ダウンロードした
-          STATE.md / SOURCE_CONTEXT.md / TEST_RESULT.md を選びます
-          (作業フォルダの .copilot-harness/handoff にも同じファイルがあります)。</p></li>
-      <li><div class="step-title">指示文をコピーして Copilot に貼り付け、送信する</div>
-        <div class="row"><button class="btn primary" id="b-copy-prompt">指示文をコピー</button>
-          <span class="muted small">Copilot の入力欄で Ctrl+V → 送信</span></div></li>
+        <p class="muted small">Windows の Copilot アプリを使う場合は、アプリを開いて「新しいチャット」を押してください
+          (前の相談と混ざらないようにするためです)。</p></li>
+      <li><div class="step-title">資料ファイル 3 つを Copilot の入力欄に添付する <span class="muted">(まだ送信しません)</span></div>
+        <ol class="sub-steps">
+          <li><button class="btn small" id="b-download">3 つのファイルをダウンロード</button>
+            <span class="muted small">パソコンの「ダウンロード」フォルダに保存されます</span></li>
+          <li>Copilot の入力欄の左にある「<b>＋</b>」→「<b>画像またはファイルを追加</b>」を押す</li>
+          <li>「ダウンロード」フォルダの <b>STATE.md</b>・<b>SOURCE_CONTEXT.md</b>・<b>TEST_RESULT.md</b> を、
+            Ctrl キーを押しながら 3 つクリックして「開く」</li>
+          <li>入力欄の上に 3 つのファイル名が並べば OK です</li>
+        </ol></li>
+      <li><div class="step-title">依頼文をコピーして、Copilot へ送信する</div>
+        <ol class="sub-steps">
+          <li><button class="btn primary" id="b-copy-prompt">自動生成依頼文をコピー</button></li>
+          <li>③でダウンロードしたファイルと a でコピーした依頼文を Copilot へ送信</li>
+        </ol>
+        <p class="small muted">送信する直前の Copilot の入力欄は、次のようになります。</p>
+        <div class="copilot-mock" aria-label="送信直前の Copilot の入力欄の見本">
+          <div class="mock-files">
+            <span class="mock-file">STATE.md</span><span class="mock-file">SOURCE_CONTEXT.md</span><span class="mock-file">TEST_RESULT.md</span>
+          </div>
+          <div class="mock-text">${esc(prompt.split("\n").filter((l) => l.trim()).slice(0, 3).join(" "))} …</div>
+          <div class="mock-send" title="送信">↑</div>
+        </div>
+        <details><summary class="small">コピーされる依頼文の全文を見る</summary><pre class="log">${esc(prompt)}</pre></details></li>
       <li><div class="step-title">Copilot の回答をコピーして反映する</div>
         <p class="muted small">回答の下にあるコピーボタン (四角が重なったアイコン) を押してから、次のボタンを押します。</p>
         <div class="row"><button class="btn primary big" id="b-paste">回答を貼り付けて反映する</button></div>
@@ -160,17 +248,24 @@ function cardCopilot(card) {
         ${backend.isDemo ? `<div class="row"><button class="btn ghost small" id="b-demo-answer">(デモ用) Copilot の代わりにサンプル回答を使う</button></div>` : ""}
       </li>
     </ol>
-    <div class="alt small">ファイルを添付できないときは
-      <button class="btn small" id="b-copy-all">指示文と資料をまとめてコピー</button>
-      <span class="muted">(${bundleLen.toLocaleString()} 文字。長すぎると Copilot に入らないことがあります)</span></div>`;
+    <details class="alt small"><summary>ファイルを添付できないときは</summary>
+      <p>手順③と④の代わりに、依頼文と資料の中身をまとめてコピーし、Copilot の入力欄に貼り付けて送信します。</p>
+      <div class="row"><button class="btn small" id="b-copy-all">依頼文と資料をまとめてコピー</button>
+      <span class="muted">(${bundleLen.toLocaleString()} 文字。長すぎると Copilot に入らないことがあります)</span></div></details>`;
 
   $("b-copilot").onclick = () => window.open(COPILOT_URL, "_blank", "noopener");
   $("b-download").onclick = () => {
     for (const name of ["STATE.md", "SOURCE_CONTEXT.md", "TEST_RESULT.md"]) download(name, s.handoff[name] || "");
     toast("3 つのファイルをダウンロードしました");
   };
-  $("b-copy-prompt").onclick = () => copyText(prompt, "指示文");
-  $("b-copy-all").onclick = () => copyText(pyJson("handoff_bundle"), "指示文と資料");
+  $("b-copy-prompt").onclick = async (e) => {
+    const btn = e.currentTarget; // await の後は currentTarget が null になるため先に保持
+    if (await copyText(prompt, "依頼文")) markCopied(btn, "✓ コピーしました → Copilot の入力欄に Ctrl + V");
+  };
+  $("b-copy-all").onclick = async (e) => {
+    const btn = e.currentTarget;
+    if (await copyText(pyJson("handoff_bundle"), "依頼文と資料")) markCopied(btn, "✓ コピーしました");
+  };
   $("b-paste").onclick = async () => {
     let text = "";
     try {
@@ -192,6 +287,15 @@ function cardCopilot(card) {
   if ($("b-retry")) $("b-retry").onclick = () => runAction("ビルド・テスト", () => pyJson("run_cli", JSON.stringify(["run"])));
 }
 
+function markCopied(btn, label) {
+  const original = btn.dataset.label || btn.textContent;
+  btn.dataset.label = original;
+  btn.textContent = label;
+  btn.classList.add("done");
+  clearTimeout(btn._timer);
+  btn._timer = setTimeout(() => { btn.textContent = original; btn.classList.remove("done"); }, 8000);
+}
+
 async function applyAnswer(text) {
   if (!text.trim()) return toast("貼り付ける内容が空です");
   const before = state.run_id;
@@ -199,7 +303,7 @@ async function applyAnswer(text) {
   if (!res) return;
   if (res.code !== 0 && res.error) return; // エラーはトーストと記録に表示済み
   if (/NEED_CONTEXT/.test(res.output)) {
-    toast("Copilot が追加の資料を求めたので、資料を作り直しました。もう一度 2〜4 を行ってください", 7000);
+    toast("Copilot が追加の資料を求めたので、資料を作り直しました。もう一度 ②〜⑤ を行ってください", 7000);
   } else if (state.phase === "DONE") {
     toast("修正が完了しました。変更内容を確認してください", 6000);
   } else if (state.run_id !== before) {
@@ -322,9 +426,9 @@ function renderStatusTab() {
   el.innerHTML = `
     <dl class="kv">
       <dt>作業フォルダ</dt><dd>${esc(backend.label)}</dd>
-      <dt>やりたいこと</dt><dd>${esc(s.task || "未入力")}</dd>
-      <dt>段階</dt><dd>${esc(PHASE_LABEL[s.phase] || s.phase)}</dd>
-      <dt>次にやること</dt><dd>${esc(NEXT_LABEL[s.phase] || s.next_action)}</dd>
+      <dt>あなたの依頼</dt><dd>${esc(s.task || "未入力")}</dd>
+      <dt>段階</dt><dd>${esc(phaseLabel())}</dd>
+      <dt>次にやること</dt><dd>${esc(NEXT_LABEL[isFirstConsult() ? "WAITING_COPILOT" : s.phase] || s.next_action)}</dd>
       <dt>ビルド</dt><dd><span class="badge ${esc(s.build)}">${esc(s.build)}</span></dd>
       ${s.has_flash ? `<dt>書込み</dt><dd><span class="badge ${esc(s.flash)}">${esc(s.flash)}</span></dd>` : ""}
       <dt>テスト</dt><dd>${tests}</dd>

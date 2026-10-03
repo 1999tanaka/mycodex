@@ -108,6 +108,40 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 }
 .steps > li:last-child::after { display: none; }
 .step-title { font-weight: 700; margin-bottom: 6px; }
+
+/* あなたの依頼 (全カード共通の先頭) */
+.request {
+  border: 2px solid var(--accent); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 18px;
+  background: var(--accent-soft);
+}
+.request-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.request-label { font-weight: 700; color: var(--accent); font-size: 14px; }
+.request-text { margin-top: 6px; white-space: pre-wrap; font-size: 16px; }
+textarea.task-input { min-height: 110px; font-size: 15px; }
+.steps .request { margin: 4px 0 0; }
+.done-mark { color: var(--ok); font-size: 13px; font-weight: 600; margin-left: 6px; }
+.flow { background: var(--code-bg); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
+.sub-steps { list-style: lower-alpha; margin: 4px 0 8px; padding-left: 22px; }
+.sub-steps > li { margin: 6px 0; padding-left: 2px; }
+.sub-steps > li::marker { color: var(--muted); font-weight: 700; }
+.btn.done { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+
+/* 送信直前の Copilot の入力欄の見本 */
+.copilot-mock {
+  position: relative; border: 2px solid var(--line); border-radius: 18px; padding: 10px 52px 12px 12px;
+  background: var(--bg); margin: 6px 0 8px; font-size: 13px;
+}
+.mock-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.mock-file {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line); font-size: 12px;
+}
+.mock-file::before { content: "📄"; }
+.mock-text { color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mock-send {
+  position: absolute; right: 10px; bottom: 10px; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--text); color: var(--bg); font-weight: 700;
+}
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
 .alt { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 

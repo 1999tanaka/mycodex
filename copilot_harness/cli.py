@@ -301,7 +301,7 @@ def cmd_note(args) -> int:
         verified=args.verified or [], finding=args.finding, suspects=args.suspect or [],
         clear_suspects=args.clear_suspects, constraints=args.constraint or [], objective=args.objective,
         keywords=_split(args.keywords), resume=args.resume, reset_iterations=args.reset_iterations,
-        clear_requested=args.clear_requested,
+        clear_requested=args.clear_requested, task=args.task,
     )
     return 0
 
@@ -407,6 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--resume", action="store_true", help="HUMAN_REVIEW_REQUIRED から再開")
     s.add_argument("--reset-iterations", action="store_true")
     s.add_argument("--clear-requested", action="store_true", help="NEED_CONTEXT で追加したファイルをクリア")
+    s.add_argument("--task", help="依頼内容 (やりたいこと) を書き換える (履歴・修正回数は保持)")
     s.set_defaults(func=cmd_note)
     return p
 
