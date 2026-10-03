@@ -29,6 +29,7 @@ PASS = "PASS"
 FAIL = "FAIL"
 NOT_RUN = "NOT_RUN"
 SKIPPED = "SKIPPED"
+MANUAL = "MANUAL"  # ブラウザでは実行できず、人がローカルで実行する
 
 NEXT_ACTION = {
     INIT: "タスクを開始してください: python harness.py start \"<task>\"",

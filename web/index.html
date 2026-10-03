@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mycodex — Copilot 開発アシスタント</title>
+<meta name="description" content="Microsoft Copilot と一緒にプログラムを直すための作業ナビ (ブラウザ版)">
+<link rel="stylesheet" href="style.css?v=__BUILD__">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">mycodex <span class="brand-sub">Copilot 開発アシスタント</span></div>
+  <div class="project" id="project-label" hidden></div>
+  <div class="top-actions" id="top-actions" hidden>
+    <button class="btn ghost" id="btn-refresh" title="ほかのアプリで変更したファイルを読み込み直します">最新の状態に更新</button>
+    <button class="btn ghost" id="btn-switch">フォルダを変える</button>
+  </div>
+</header>
+
+<main>
+  <!-- 起動中 -->
+  <section id="loading" class="center-card">
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="loading-text">準備しています…</p>
+    <p class="muted">初回は Python の読み込みに数十秒かかります。2 回目からは速くなります。</p>
+  </section>
+
+  <!-- フォルダ選択 -->
+  <section id="welcome" class="center-card" hidden>
+    <h1>Copilot と一緒にプログラムを直す作業ナビ</h1>
+    <p>やりたいことを書くと、Copilot に渡す資料を自動で作り、Copilot の答えを自動でプログラムに反映します。
+       あなたは画面の案内どおりにボタンを押すだけです。</p>
+    <div class="welcome-actions">
+      <button class="btn primary big" id="btn-open">作業するフォルダを選ぶ</button>
+      <button class="btn big" id="btn-reopen" hidden>前回のフォルダを開く</button>
+      <button class="btn ghost big" id="btn-demo">まずはデモで試す</button>
+    </div>
+    <p class="muted small">ファイルはこのパソコンの中だけで処理されます。インターネットに送られるのは、あなたが Copilot に貼り付けた内容だけです。</p>
+    <p class="warn small" id="unsupported" hidden>このブラウザはフォルダの読み書きに対応していません。Microsoft Edge か Google Chrome で開いてください (デモは利用できます)。</p>
+  </section>
+
+  <!-- 作業画面 -->
+  <section id="app" hidden>
+    <div class="statusbar" id="statusbar"></div>
+    <div class="layout">
+      <div class="primary">
+        <div class="card next" id="next-card"></div>
+      </div>
+      <aside class="side">
+        <nav class="tabs" role="tablist">
+          <button role="tab" data-tab="status" class="active">状態</button>
+          <button role="tab" data-tab="files">ファイル編集</button>
+          <button role="tab" data-tab="diff">変更内容</button>
+          <button role="tab" data-tab="log">記録</button>
+        </nav>
+        <div class="tab-panel" id="tab-status"></div>
+        <div class="tab-panel" id="tab-files" hidden>
+          <div class="files">
+            <select id="file-list" size="12" aria-label="ファイル一覧"></select>
+            <div class="editor">
+              <div class="editor-head"><span id="file-name" class="mono">ファイルを選んでください</span><span id="file-enc" class="muted small"></span></div>
+              <textarea id="file-text" spellcheck="false" disabled></textarea>
+              <div class="row"><button class="btn primary" id="btn-save" disabled>保存</button><span id="save-msg" class="muted small"></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="tab-panel" id="tab-diff" hidden><pre id="diff-view" class="diff"></pre></div>
+        <div class="tab-panel" id="tab-log" hidden><pre id="log-view" class="log"></pre></div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busy-text">処理しています…</p></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.29.5/full/pyodide.js"></script>
+<script src="core.js?v=__BUILD__"></script>
+<script src="ui.js?v=__BUILD__"></script>
+</body>
+</html>

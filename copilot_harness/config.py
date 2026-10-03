@@ -75,7 +75,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "repo_map_max_lines": 120,
     },
     "patch": {
-        # auto: git があれば git apply、無ければ内蔵エンジン / git / python
+        # auto: git リポジトリなら git apply、それ以外は内蔵エンジン / git / python
         "engine": "auto",
         # LLM の diff は hunk 行数がずれやすいため --recount を既定にする
         "git_apply_args": ["--recount"],

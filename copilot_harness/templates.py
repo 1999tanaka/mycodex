@@ -63,7 +63,7 @@ context:
   include_repo_map: true
 
 patch:
-  # auto: git があれば git apply、無ければ内蔵エンジン (標準ライブラリのみ)。
+  # auto: git リポジトリなら git apply、それ以外は内蔵エンジン (標準ライブラリのみ)。
   #       UTF-8 以外 (Shift-JIS など) のファイルを変更する patch は内蔵エンジンで適用する
   engine: auto
 """

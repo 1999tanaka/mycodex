@@ -10,3 +10,6 @@ venv/
 
 # Harness をこのディレクトリで試した場合の作業ファイル
 .copilot-harness/
+
+# ブラウザ版のビルド結果
+_site/

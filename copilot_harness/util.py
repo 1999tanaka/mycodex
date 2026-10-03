@@ -5,8 +5,12 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
+
+# ブラウザ (Pyodide / WebAssembly) 上で動作中か。外部コマンドは起動できない
+IN_BROWSER = sys.platform == "emscripten"
 
 
 class HarnessError(Exception):

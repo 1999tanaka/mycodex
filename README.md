@@ -12,6 +12,41 @@ Copilot = Brain   /   Python Harness = Memory + Hands + Tools   /   Human = Brid
 
 Copilot API・Copilot Studio・OneDrive 同期・Notebook は使いません (Notebook は任意)。
 
+## ブラウザ版 (インストール不要・コマンド不要)
+
+プログラムやコマンドに慣れていない人向けに、ブラウザだけで使える画面を用意しています (`web/`)。
+Python は Pyodide (ブラウザ内で動く Python) で動き、パソコンへのインストールは不要です。
+
+- 公開 URL: GitHub Pages で公開した場合 `https://<ユーザー名>.github.io/<リポジトリ名>/`
+- 対応ブラウザ: **Microsoft Edge / Google Chrome** (フォルダの読み書きに File System Access API を使うため)
+- 画面に「次にやること」が 1 枚のカードで表示され、コピー・貼り付け・ダウンロード・Copilot を開く操作はボタンで行います
+- 作業フォルダを選ぶと、そのフォルダのファイルを直接読み書きします。ファイルの編集も画面上でできます
+- ファイルはパソコンの中だけで処理されます (外部に送られるのは、自分で Copilot に貼り付けた内容だけ)
+- 「まずはデモで試す」で、ブラウザ内の一時フォルダを使って一連の流れを体験できます
+
+ブラウザの中で実行できるもの / できないもの:
+
+| 処理 | ブラウザ版 |
+|---|---|
+| 資料作り・Copilot の回答の検証と反映・取り消し・状態管理 | ○ |
+| Python の構文チェック・unittest | ○ (ブラウザ内の Python で実行。標準ライブラリだけで動くコードが対象) |
+| arduino-cli などのビルド・マイコンへの書込み・Excel マクロの実行・PowerShell など | × ブラウザからはパソコンのプログラムを起動できないため、画面に表示されるコマンドをコピーしていつもの方法で実行し、結果 (成功 / 失敗と、エラーメッセージ) を画面に入力します |
+
+公開方法: リポジトリの Settings → Pages → Source を「GitHub Actions」にすると、`main` への push で
+`.github/workflows/pages.yml` がテスト → サイトの組み立て → 公開を行います
+(GitHub Free では、Pages は公開リポジトリでのみ利用できます)。
+
+手元で確認する場合:
+
+```bash
+python web/build.py
+```
+```bash
+python -m http.server 8765 --bind 127.0.0.1 -d _site
+```
+
+ブラウザで `http://localhost:8765/` を開きます。
+
 ## 必要環境
 
 **必須は Python 3.11 以降のみ**です。標準ライブラリだけで全機能が動作します。
@@ -248,7 +283,7 @@ Copilot の修正後、人が VBE の [ファイル] → [ファイルのイン�
 
 ## git / PyYAML が無い場合の動作
 
-- **patch 適用**: `patch.engine: auto` (既定) は git があれば `git apply`、無ければ内蔵エンジン。
+- **patch 適用**: `patch.engine: auto` (既定) は、プロジェクトが git リポジトリなら `git apply`、それ以外 (git が無い・リポジトリでない・ブラウザ版) は内蔵エンジン。
   内蔵エンジンは git apply と同じくコンテキスト完全一致 (fuzz なし)・位置ずれは最も近い一致箇所を採用し、
   全ファイルを検査してから書き込みます。改行コード (LF/CRLF) と文字コード (UTF-8/BOM/CP932) を保持します。
   `engine: git` / `engine: python` で固定もできます

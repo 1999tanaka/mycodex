@@ -8,9 +8,13 @@
 
 from __future__ import annotations
 
+import io
+import os
+import re
 import shutil
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from .repo import scan_repository
@@ -20,16 +24,28 @@ from .util import read_text
 
 PREFIX = "builtin:"
 ASSETS = Path(__file__).resolve().parent / "assets"
+_UNITTEST_RE = re.compile(r"^\s*(?:python3?|py)(?:\.exe)?\s+-m\s+unittest\b", re.IGNORECASE)
 
 
 def is_builtin(command) -> bool:
     return isinstance(command, str) and command.strip().startswith(PREFIX)
 
 
+def browser_equivalent(command) -> str | None:
+    """ブラウザ (Pyodide) で代わりに実行できる内蔵コマンド。無ければ None (= 人がローカルで実行)。"""
+    if is_builtin(command):
+        return command
+    if isinstance(command, str) and _UNITTEST_RE.match(" ".join(command.split())):
+        return PREFIX + "python-unittest"
+    return None
+
+
 def run_builtin(command: str, h, stage: str) -> CommandResult:
     name = command.strip()[len(PREFIX):].strip()
     if name == "python-syntax":
         return python_syntax(h, stage)
+    if name == "python-unittest":
+        return python_unittest(h, stage)
     if name in ("vba-build", "vba-test", "vba-export"):
         return vba(h, name[len("vba-"):], stage)
     return CommandResult(stage, FAIL, command, reason=f"不明な内蔵コマンドです: {name}")
@@ -51,6 +67,39 @@ def python_syntax(h, stage: str) -> CommandResult:
         stage, FAIL if errors else PASS, PREFIX + "python-syntax", 1 if errors else 0, out,
         time.monotonic() - start, f"構文エラー {len(errors)} 件" if errors else "",
     )
+
+
+def python_unittest(h, stage: str) -> CommandResult:
+    """unittest を同じプロセス内で実行する (ブラウザでも動く)。出力は python -m unittest -v と同じ形式。"""
+    import unittest
+
+    start = time.monotonic()
+    root = str(h.root)
+    buf = io.StringIO()
+    before = set(sys.modules)
+    old_cwd = os.getcwd()
+    sys.path.insert(0, root)
+    code = 1
+    try:
+        os.chdir(root)
+        suite = unittest.TestLoader().discover(start_dir=root, top_level_dir=root)
+        result = unittest.TextTestRunner(stream=buf, verbosity=2).run(suite)
+        code = 0 if result.wasSuccessful() and result.testsRun else 1
+        if not result.testsRun:
+            buf.write("テストが見つかりません (test*.py)\n")
+    except Exception:
+        buf.write(traceback.format_exc())
+    finally:
+        os.chdir(old_cwd)
+        if root in sys.path:
+            sys.path.remove(root)
+        # 次回の実行で修正後のコードを読み直すため、プロジェクトのモジュールを破棄する
+        for name in set(sys.modules) - before:
+            path = getattr(sys.modules.get(name), "__file__", None) or ""
+            if path and os.path.abspath(path).startswith(os.path.abspath(root)):
+                sys.modules.pop(name, None)
+    return CommandResult(stage, PASS if code == 0 else FAIL, PREFIX + "python-unittest", code, buf.getvalue(),
+                         time.monotonic() - start, "" if code == 0 else "exit code 1")
 
 
 def vba(h, action: str, stage: str) -> CommandResult:

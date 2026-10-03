@@ -7,14 +7,14 @@ import time
 from pathlib import Path
 
 from . import state as S
-from .builtin_cmds import is_builtin, run_builtin
+from .builtin_cmds import browser_equivalent, is_builtin, run_builtin
 from .context import files_from_log
 from .repo import scan_repository
 from .runner import (
     CommandResult, TestOutcome, capture_uart, excerpt, parse_exitcode_output, parse_test_output,
-    run_command, write_log,
+    TEST_LINE_RE, run_command, write_log,
 )
-from .util import HarnessError, read_text, sha256_text, write_text
+from .util import IN_BROWSER, HarnessError, read_text, sha256_text, write_text
 from .workflow import Harness, say
 
 GENERIC_TOKENS = {"TEST", "TESTS", "FAIL", "PASS", "ERROR", "CHECK", "BASIC", "UNIT", "HW", "PY", "SELF", "COMMAND"}
@@ -44,6 +44,14 @@ def _stage(h: Harness, stage: str) -> CommandResult:
     cfg = h.cfg
     command = cfg.get(f"{stage}.command")
     say(f"[{stage}] {' '.join(str(command or '(未設定)').split())}")
+    if IN_BROWSER and command and not is_builtin(command):
+        alt = browser_equivalent(command)
+        if alt:
+            say(f"[{stage}] ブラウザ内で {alt} として実行します")
+            command = alt
+        else:
+            say(f"[{stage}] ブラウザでは実行できません → ローカルで実行して結果を入力してください")
+            return CommandResult(stage, S.MANUAL, str(command), reason="ローカルで実行")
     if is_builtin(command):
         res = run_builtin(command, h, stage)
     else:
@@ -56,7 +64,8 @@ def _stage(h: Harness, stage: str) -> CommandResult:
 
 def build_ok(h: Harness) -> bool:
     st = h.state
-    return st["build"] == S.PASS or (st["build"] == S.SKIPPED and not h.cfg.get("build.required", True))
+    return (st["build"] in (S.PASS, S.MANUAL)
+            or (st["build"] == S.SKIPPED and not h.cfg.get("build.required", True)))
 
 
 def test_configured(cfg) -> bool:
@@ -102,7 +111,7 @@ def do_flash(h: Harness, force: bool = False) -> bool:
         st.set_phase(S.FLASH_FAILED, res.reason)
     st.update_last_history(flash=res.status)
     st.save()
-    return res.status in (S.PASS, S.SKIPPED)
+    return res.status in (S.PASS, S.SKIPPED, S.MANUAL)
 
 
 # ---------------------------------------------------------------- test
@@ -146,20 +155,24 @@ def do_test(h: Harness, force: bool = False):
     """戻り値: True=PASS / False=FAIL / PENDING=手動テスト待ち。"""
     st, cfg = h.state, h.cfg
     _prepare_results(h)
-    if st["flash"] not in (S.PASS, S.SKIPPED) and not force:
+    if st["flash"] not in (S.PASS, S.SKIPPED, S.MANUAL) and not force:
         raise HarnessError("flash が PASS していないため test を開始しません。")
     mode = str(cfg.get("test.mode", "command"))
     required = [str(x) for x in cfg.list("test.required")]
     uart_cfg = cfg.get("test.uart", {}) or {}
     extra_fail = ""
-    if mode == "manual":
+    test_cmd = cfg.get("test.command")
+    browser_manual = IN_BROWSER and (mode == "uart" or (bool(test_cmd) and not browser_equivalent(test_cmd)))
+    if mode == "manual" or browser_manual or st["build"] == S.MANUAL or st["flash"] == S.MANUAL:
         st["tests"], st["failures"] = {}, []
         st.set_phase(S.WAITING_TEST, "人によるテスト結果の入力待ち")
         st.save()
-        say("[test] 手動テストモード: テストを実行し、結果を入力してください")
-        say("  TEST 行をコピーして    python harness.py result --paste")
+        say("[test] 人がテストして結果を入力する手順です")
+        for cmd in local_commands(h):
+            say(f"  ローカルで実行: {cmd}")
         say("  全部 OK なら           python harness.py result --pass")
-        say('  NG なら                python harness.py result --fail "NG の内容"')
+        say('  NG なら                python harness.py result --fail "NG の内容" [--stage build|flash|test] [--log-file ログ]')
+        say("  TEST 行をコピーした    python harness.py result --paste")
         return PENDING
     if mode == "uart":
         say(f"[test] UART {uart_cfg.get('port')} @ {uart_cfg.get('baudrate')}")
@@ -198,6 +211,70 @@ def do_result(h: Harness, text: str) -> bool:
         raise HarnessError("TEST:<名前>:<PASS|FAIL> 形式の行がありません。--pass / --fail も使えます。")
     oc.boot = S.NOT_RUN if h.cfg.profile.name != "mcu" else oc.boot
     record_outcome(h, oc, text)
+    return finish(h)
+
+
+def local_commands(h: Harness) -> list[str]:
+    """人がローカルで実行する必要のあるコマンド (ブラウザ版や手動モードで表示する)。"""
+    cfg, out = h.cfg, []
+    for stage in ("build", "flash", "test"):
+        cmd = cfg.get(f"{stage}.command")
+        if not cmd:
+            continue
+        if stage == "test" and cfg.get("test.mode") == "uart":
+            continue
+        if IN_BROWSER and browser_equivalent(cmd):
+            continue
+        if not IN_BROWSER and is_builtin(cmd):
+            continue
+        out.append(" ".join(str(cmd).split()))
+    return out
+
+
+def do_manual_result(h: Harness, passed: bool, stage: str = "test", detail: str = "", log: str = "") -> bool:
+    """人が報告した結果 (成功 / どの段階で失敗したか + ログ) を記録して判定する。"""
+    st, cfg = h.state, h.cfg
+    if not st["task"]:
+        raise HarnessError('タスクが未設定です: python harness.py start "<task>"')
+    if stage not in ("build", "flash", "test"):
+        raise HarnessError(f"stage は build / flash / test のいずれかです: {stage}")
+    _prepare_results(h)
+    log = log or ""
+    write_text(_log_path(h, f"manual_{stage}.log"), f"# passed={passed} stage={stage}\n# {detail}\n{log}")
+    has_flash = bool(cfg.get("flash.command"))
+    if passed:
+        st["build"] = S.PASS if st["build"] in (S.MANUAL, S.NOT_RUN) else st["build"]
+        if has_flash and st["flash"] in (S.MANUAL, S.NOT_RUN):
+            st["flash"] = S.PASS
+        oc = parse_test_output(log, []) if TEST_LINE_RE.search(log) else None
+        if oc is None or not oc.tests:
+            oc = TestOutcome(status=S.PASS, boot=S.NOT_RUN, tests={"MANUAL": {"status": "PASS", "detail": detail}}, output=log)
+        record_outcome(h, oc, log)
+        return finish(h)
+    excerpt_text = excerpt(log or detail, 60)
+    files = files_from_log(log, scan_repository(cfg), cfg) if log else []
+    message = detail or "NG (詳細は log)"
+    if stage == "build":
+        st.reset_results(st["run_id"])
+        st.data.update(build=S.FAIL, build_excerpt=excerpt_text, build_error_files=files,
+                       failures=[f"BUILD: {message}"])
+        st.set_phase(S.BUILD_FAILED, message)
+    elif stage == "flash":
+        st.data.update(build=S.PASS, flash=S.FAIL, flash_excerpt=excerpt_text, tests={},
+                       failures=[f"FLASH: {message}"])
+        st.set_phase(S.FLASH_FAILED, message)
+    else:
+        st["build"] = S.PASS if st["build"] in (S.MANUAL, S.NOT_RUN) else st["build"]
+        if has_flash and st["flash"] in (S.MANUAL, S.NOT_RUN):
+            st["flash"] = S.PASS
+        oc = parse_test_output(log, []) if TEST_LINE_RE.search(log) else None
+        if oc is None or not oc.tests or oc.status == S.PASS:
+            oc = TestOutcome(status=S.FAIL, boot=S.NOT_RUN, tests={"MANUAL": {"status": "FAIL", "detail": message}},
+                             failures=[f"MANUAL: {message}"], output=log)
+        record_outcome(h, oc, log)
+        st["test_failure_files"] = list(dict.fromkeys(st["test_failure_files"] + files))
+    st.update_last_history(note=f"人の報告: {stage} {'OK' if passed else 'NG'} {detail}".strip())
+    st.save()
     return finish(h)
 
 

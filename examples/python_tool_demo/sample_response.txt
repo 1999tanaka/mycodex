@@ -1,0 +1,17 @@
+ACTION: PATCH
+RUN_ID: {RUN_ID}
+FILES:
+- calc.py
+BEGIN_PATCH
+--- a/calc.py
++++ b/calc.py
+@@ -1,3 +1,3 @@
+ """見積もり計算ツール (デモ用)。"""
+
+-TAX_RATE = 0.08  # 消費税率
++TAX_RATE = 0.10  # 消費税率
+END_PATCH
+SUMMARY:
+消費税率の定数 TAX_RATE を 0.08 から 0.10 に変更しました。
+FINDING:
+税率が 8% のままだったため、テストが期待する 10% の税込み価格と一致していませんでした。

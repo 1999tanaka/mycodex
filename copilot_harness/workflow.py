@@ -283,7 +283,7 @@ class Harness:
         say(f"  iteration {st['iteration']} / {cfg.get('limits.max_iterations')}  (engine: {engine})")
 
     def patch_engine(self, pp=None) -> str:
-        """patch.engine: auto (git があれば git、無ければ内蔵) / git / python。
+        """patch.engine: auto (git リポジトリなら git、それ以外は内蔵) / git / python。
 
         auto では、UTF-8 以外 (Shift-JIS など) のファイルを変更する patch や、
         新規ファイルを UTF-8/LF 以外で作る設定 (VBA) の場合は内蔵エンジンを使う。
@@ -293,7 +293,9 @@ class Harness:
         if eng not in ("auto", "git", "python"):
             raise HarnessError(f"patch.engine の値が不正です: {eng} (auto / git / python)")
         if eng == "auto":
-            if not git_available() or (pp is not None and self._needs_builtin_engine(pp)):
+            # git repository でないフォルダでは git apply が利用者の git 設定 (core.autocrlf 等) の影響を
+            # 受けて CRLF のファイルと一致しないことがあるため、内蔵エンジンを使う
+            if not is_git_repo(self.root) or (pp is not None and self._needs_builtin_engine(pp)):
                 return "python"
             return "git"
         if eng == "git" and not git_available():

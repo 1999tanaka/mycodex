@@ -187,13 +187,15 @@ def cmd_test(args) -> int:
 
 def cmd_result(args) -> int:
     """手動テストの結果を入力する (test.mode: manual)。"""
-    from .execute import do_result
+    from .execute import do_manual_result, do_result
     h = _harness(args)
+    log = Path(args.log_file).read_text(encoding="utf-8-sig", errors="replace") if args.log_file else ""
     if args.passed is not None:
-        text = f"TEST:MANUAL:PASS:{args.passed}" if args.passed else "TEST:MANUAL:PASS"
-    elif args.failed:
-        text = f"TEST:MANUAL:FAIL:{args.failed}"
-    elif args.file:
+        return 0 if do_manual_result(h, True, "test", args.passed or "", log) else 1
+    if args.failed:
+        do_manual_result(h, False, args.stage, args.failed, log)
+        return 1
+    if args.file:
         text = Path(args.file).read_text(encoding="utf-8-sig")
     else:
         from .clipboard import ClipboardError, read_clipboard
@@ -359,6 +361,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--file", help="TEST 行を書いたファイルを取り込む")
     g.add_argument("--pass", dest="passed", nargs="?", const="", help="全テスト OK (任意で詳細)")
     g.add_argument("--fail", dest="failed", help="NG の内容")
+    s.add_argument("--stage", choices=["build", "flash", "test"], default="test", help="--fail のとき、どの段階で失敗したか")
+    s.add_argument("--log-file", help="エラーメッセージやログを書いたファイル (Copilot に渡す)")
     s.set_defaults(func=cmd_result)
     s = sub.add_parser("vba-export", help="Excel ブックの VBA モジュールを src/vba へ書き出す (Excel 必須)")
     s.set_defaults(func=cmd_vba_export)

@@ -188,7 +188,8 @@ def parse_test_output(text: str, required: list[str], boot_marker: str = "") -> 
 
 
 # ---------------------------------------------------------------- 終了コード判定 (pytest / unittest など)
-PYTEST_FAIL_RE = re.compile(r"^(FAILED|ERROR) (\S+?)(?: - (.*))?\s*$", re.M)
+# "FAILED tests/x.py::test_a - msg" (pytest)。unittest の集計行 "FAILED (failures=2)" は除く
+PYTEST_FAIL_RE = re.compile(r"^(FAILED|ERROR) ([^\s(]\S*?)(?: - (.*))?\s*$", re.M)
 UNITTEST_FAIL_RE = re.compile(r"^(FAIL|ERROR): (\S+) \(([^)]*)\)", re.M)
 PYTEST_SUMMARY_RE = re.compile(r"^=+ (.*?\d+ (?:passed|failed|error|errors|skipped).*?) in [\d.]+s", re.M)
 UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests? in", re.M)
